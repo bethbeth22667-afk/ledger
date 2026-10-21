@@ -1,5 +1,5 @@
 // 更新網頁內容後，把版本號加 1，手機才會抓到新版
-const CACHE = 'ledger-v2';
+const CACHE = 'ledger-v3';
 const SHELL = ['./', 'index.html', 'manifest.json', 'firebase-config.js',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 
