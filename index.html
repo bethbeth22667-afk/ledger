@@ -242,7 +242,7 @@ function openTxn(type='expense',editId=''){
  const subs=[...(data.subcategories?.[type]?.[selCat]||[])];const curSub=t?.subcategory||'';if(curSub&&!subs.includes(curSub))subs.push(curSub);
  const base=t?(t.base!==undefined?t.base:t.amount):'';
  openModal((t?'編輯':'新增')+(isE?'支出':'收入'),`<form onsubmit="submitTxn(event,'${type}'${t?`,'${t.id}'`:''})"><div class="formgrid">
-<div class="field"><label>日期</label><input name="date" type="date" value="${t?esc(t.date):dateNow()}" required></div>
+<div class="field"><label>日期</label><input name="date" type="date" value="${t?esc(t.date):defaultDate()}" required></div>
 <div class="field"><label>金額（NT$）</label><input name="amount" type="number" min="1" step="1" placeholder="0" value="${base}" oninput="calcNet()" required></div>
 ${isE?feeBlock(t?.fee,t?.discount,'pay'):''}
 <div class="field"><label>主分類</label><select name="category" id="txnCategory" onchange="updateTxnSubcategory('${type}')">${cats.map(c=>`<option ${c===selCat?'selected':''}>${esc(c)}</option>`).join('')}</select></div>
@@ -282,7 +282,10 @@ function updateAccount(e,i){e.preventDefault();let f=new FormData(e.target),a=da
  if(nt!==a.type&&acctEntries(a).length&&!confirm(`確定把「${a.name}」從「${ACC_TYPES[a.type]||a.type}」改成「${ACC_TYPES[nt]||nt}」？\n這個帳戶已有往來紀錄，改類別後餘額的計算方式會改變（信用卡以「未繳金額」顯示，其他以「餘額」顯示）。`))return;
  a.name=f.get('name');a.type=nt;a.balance=+f.get('balance')||0;if(nt==='credit'){a.limit=+f.get('limit')||a.limit||0;a.closeDay=+f.get('closeDay')||a.closeDay||15;a.dueDay=+f.get('dueDay')||a.dueDay||5}closeModal();save();toast('帳戶已更新')}
 function deleteAccount(i){let a=data.accounts.find(x=>x.id===i);if(!a)return;if(data.transactions.some(t=>t.accountId===i||t.fromId===i||t.toId===i)){return toast('此帳戶已有交易，為保留帳務紀錄無法刪除')}if(confirm(`確定刪除「${a.name}」？`)){data.accounts=data.accounts.filter(x=>x.id!==i);save()}}
-function acctOpts(list,sel){return list.map(a=>`<option value="${a.id}" ${a.id===sel?'selected':''}>${esc(a.name)}（${ACC_TYPES[a.type]||a.type}）</option>`).join('')}
+function acctOpts(list,sel){const order=['bank','credit','cash','ewallet','investment'];const opt=a=>`<option value="${a.id}" ${a.id===sel?'selected':''}>${esc(a.name)}</option>`;
+ const groups=order.map(tp=>[ACC_TYPES[tp],list.filter(a=>a.type===tp)]);const other=list.filter(a=>!order.includes(a.type));if(other.length)groups.push(['其他',other]);
+ return groups.filter(g=>g[1].length).map(g=>`<optgroup label="${g[0]}">${g[1].map(opt).join('')}</optgroup>`).join('')}
+function defaultDate(){const home=document.getElementById('view-home');return (selDay&&homeTab==='cal'&&home&&home.classList.contains('active'))?selDay:dateNow()}
 function acctEntries(a){
  const isC=a.type==='credit',out=[];let seq=0;
  const add=(date,label,note,delta,tid)=>out.push({date:date||'',label,note:note||'',delta,tid,seq:seq++});
