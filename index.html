@@ -402,7 +402,7 @@ function swipeRow(inner,tapFn,delFn,idv,cls=''){return `<div class="swipe ${cls=
 function delLink(fn,idv,label='刪除這筆'){return idv?`<button type="button" class="link-danger" onclick="delFromEdit('${fn}','${idv}')">${label}</button>`:''}
 function dueSettled(t){return t.base!==undefined?+t.base:+t.amount}
 let calcTarget=null,calcOriginal='';
-function openCalc(input){calcTarget=input;calcOriginal=input.value||'';document.getElementById('calcExpr').value=calcOriginal;document.getElementById('calcPreview').textContent=calcOriginal?'':'輸入算式';document.getElementById('calcOverlay').classList.add('open');calcRefresh()}
+function openCalc(input){calcTarget=input;calcOriginal=input.value||'';document.getElementById('calcExpr').value=calcOriginal;document.getElementById('calcOverlay').classList.add('open');calcRefresh()}
 function closeCalc(){document.getElementById('calcOverlay').classList.remove('open');calcTarget=null}
 function calcKey(k){const e=document.getElementById('calcExpr');e.value+=k;calcRefresh()}
 function calcClear(){document.getElementById('calcExpr').value='';calcRefresh()}
