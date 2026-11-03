@@ -115,6 +115,11 @@ input,select,textarea{width:100%;padding:11px 12px;border:1px solid light-dark(#
   <div class="section-head"><h2>收支明細</h2><span class="muted" id="txnCount">0 筆</span></div>
   <div class="toolbar"><button class="btn" onclick="openTxn('expense')">＋ 新增交易</button><button class="btn secondary" onclick="openTransfer()">⇄ 帳戶轉帳</button><button class="btn secondary" onclick="openCashMove('withdraw')">↓ 提領現金</button><button class="btn secondary" onclick="openCashMove('deposit')">↑ 存入現金</button><button class="btn ghost" onclick="exportCSV('transactions')">匯出交易 CSV</button></div>
   <div class="filters"><select id="txnFilter" onchange="renderTransactions()"><option value="all">全部類型</option><option value="income">收入</option><option value="expense">支出</option><option value="receivable_collection">應收款回收</option><option value="transfer">轉帳</option><option value="cardpayment">信用卡繳款</option></select><input type="month" id="txnMonth" onchange="renderTransactions()"></div>
+  <div class="panel" style="margin-bottom:12px">
+   <div class="section-head"><h3 style="margin:0">細項月明細查詢</h3><span class="muted">依子項目查看歷史收支</span></div>
+   <div class="filters"><select id="detailType" onchange="updateDetailCategories()"><option value="expense">支出細項</option><option value="income">收入細項</option></select><select id="detailCategory" onchange="updateDetailSubcategories()"></select><select id="detailSubcategory" onchange="renderDetailHistory()"></select></div>
+   <div id="detailHistory"></div>
+  </div>
   <div class="panel" id="txnList"></div>
  </section>
  <section class="view" id="view-due">
@@ -464,7 +469,29 @@ function renderAssetChart(currentNet){
  el.innerHTML=`<div class="asset-chart-head"><div><div class="asset-chart-title">每月資產成長</div><div class="asset-chart-sub">近 12 個月估算趨勢</div></div><div class="asset-chart-current">${money(currentNet)}</div></div><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="近十二個月資產估算折線圖">${grid}<path class="chart-area" fill="#75C5E8" d="${area}"/><path class="chart-line" d="${line}"/><circle class="chart-dot" cx="${x(points.length-1)}" cy="${y(points[points.length-1].value)}" r="4"/>${labels}</svg><div class="asset-chart-note">${esc(points[0].key)} 至 ${esc(points[points.length-1].key)} · 依帳戶餘額與已記錄收入／支出回推，為估算值。</div>`;
 }
 function txnHTML(t){let label=t.type==='transfer'?`${accountName(t.fromId)} → ${accountName(t.toId)}`:t.type==='cardpayment'?`信用卡繳款｜${accountName(t.toId)}`:(t.category||typeLabel(t.type));if(t.subcategory)label+='／'+t.subcategory;let plus=t.type==='income'||t.type==='receivable_collection';let sign=plus?'+':t.type==='expense'?'−':'';const rc=t.type==='receivable_collection';const feeTxt=(t.fee||t.discount)?` · ${rc?'款項':'原價'} ${money(t.base)}${t.fee?(rc?' −手續費 ':' ＋手續費 ')+money(t.fee):''}${t.discount?' −折扣 '+money(t.discount):''}`:'';return `<div class="rowitem"><div class="dot">${iconFor(t.type)}</div><div class="itemmain"><b>${esc(t.note||label)}</b><small>${esc(t.date||'')} · ${esc(label)}${t.accountId?' · '+esc(accountName(t.accountId)):''}${feeTxt}</small></div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:5px"><div class="amount ${plus?'green':t.type==='expense'?'red':''}">${sign}${money(t.amount)}</div><button type="button" class="btn ghost small" style="padding:4px 7px;font-size:10px" onclick="event.stopPropagation();copyTxn('${t.id}')">複製</button></div></div>`}
-function renderTransactions(){let list=document.getElementById('txnList');if(!list)return;let type=document.getElementById('txnFilter')?.value||'all',m=document.getElementById('txnMonth')?.value||'';let ts=[...data.transactions].filter(t=>(type==='all'||t.type===type)&&(!m||(t.date||'').startsWith(m))).sort((a,b)=>(b.date||'').localeCompare(a.date||''));document.getElementById('txnCount').textContent=ts.length+' 筆';list.innerHTML=ts.length?ts.map(txnRow).join(''):'<div class="empty">沒有符合條件的交易</div>'}
+function updateDetailCategories(){
+ const type=document.getElementById('detailType')?.value||'expense',cat=document.getElementById('detailCategory'),sub=document.getElementById('detailSubcategory');
+ if(!cat||!sub)return;const old=cat.value,cs=(data.categories[type]||[]).filter(c=>!data.categoryDisabled?.[type]?.[c]);
+ cat.innerHTML=cs.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');cat.value=cs.includes(old)?old:(cs[0]||'');updateDetailSubcategories();
+}
+function updateDetailSubcategories(){
+ const type=document.getElementById('detailType')?.value||'expense',category=document.getElementById('detailCategory')?.value||'',sub=document.getElementById('detailSubcategory');
+ if(!sub)return;const old=sub.value,subs=(data.subcategories?.[type]?.[category]||[]).filter(c=>!data.subcategoryDisabled?.[type]?.[category]?.[c]);
+ sub.innerHTML='<option value="">選擇細項</option>'+subs.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');sub.value=subs.includes(old)?old:(subs[0]||'');renderDetailHistory();
+}
+function renderDetailHistory(){
+ const el=document.getElementById('detailHistory');if(!el)return;
+ const type=document.getElementById('detailType')?.value||'expense',category=document.getElementById('detailCategory')?.value||'',subcategory=document.getElementById('detailSubcategory')?.value||'';
+ if(!category||!subcategory){el.innerHTML='<div class="empty">請選擇大分類與細項</div>';return}
+ const ts=data.transactions.filter(t=>t.type===type&&t.category===category&&t.subcategory===subcategory).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+ if(!ts.length){el.innerHTML=`<div class="empty">「${esc(category)}／${esc(subcategory)}」目前沒有交易紀錄</div>`;return}
+ const groups={};ts.forEach(t=>{const m=(t.date||'').slice(0,7)||'未標示月份';(groups[m]||(groups[m]=[])).push(t)});
+ const keys=Object.keys(groups).sort((a,b)=>b.localeCompare(a));
+ el.innerHTML=`<div class="note" style="margin:8px 0">查詢：${esc(category)}／${esc(subcategory)} · 共 ${ts.length} 筆</div>`+keys.map((m,i)=>{const arr=groups[m],total=arr.reduce((sum,t)=>sum+(+t.amount||0),0),open=!!detailHistoryOpen[m];return `<div class="rowitem" style="display:block"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer" onclick="toggleDetailMonth('${encodeURIComponent(m)}')"><div><b>${esc(m)}</b><small class="muted" style="display:block">${arr.length} 筆交易 ${open?'▾':'▸'}</small></div><b class="amount ${type==='income'?'green':'red'}">${money(total)}</b></div>${open?`<div style="margin:6px 0 0 10px">${arr.map(t=>`<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-top:1px solid var(--line);font-size:13px"><span>${esc(t.date||'')} · ${esc(t.note||category+'/'+subcategory)}</span><span>${money(t.amount)}</span><button class="btn ghost small" onclick="event.stopPropagation();editTxn('${t.id}')">編輯</button></div>`).join('')}</div>`:''}</div>`}).join('');
+}
+let detailHistoryOpen={};
+function toggleDetailMonth(encoded){const m=decodeURIComponent(encoded);detailHistoryOpen[m]=!detailHistoryOpen[m];renderDetailHistory()}
+function renderTransactions(){let list=document.getElementById('txnList');if(!list)return;if(document.getElementById('detailCategory')&&!document.getElementById('detailCategory').options.length)updateDetailCategories();let type=document.getElementById('txnFilter')?.value||'all',m=document.getElementById('txnMonth')?.value||'';let ts=[...data.transactions].filter(t=>(type==='all'||t.type===type)&&(!m||(t.date||'').startsWith(m))).sort((a,b)=>(b.date||'').localeCompare(a.date||''));document.getElementById('txnCount').textContent=ts.length+' 筆';list.innerHTML=ts.length?ts.map(txnRow).join(''):'<div class="empty">沒有符合條件的交易</div>'}
 function deleteTxn(i){const back=dueBack;dueBack='';const t=data.transactions.find(x=>x.id===i);if(!t){reopenDue(back);return}const d=t.dueId?data.dues.find(x=>x.id===t.dueId):null;
  if(confirm(d?`確定刪除這筆交易？\n這筆是「${d.person}｜${d.title}」的收／付款，刪除後該款項的已處理金額會一併恢復。`:'確定刪除這筆交易？')){if(d){d.paid=Math.max(0,d.paid-dueSettled(t));d.payments=(d.payments||[]).filter(p=>p.txnId!==t.id)}data.transactions=data.transactions.filter(x=>x.id!==i);save()}
  reopenDue(back)}
