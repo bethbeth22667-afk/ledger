@@ -144,6 +144,7 @@ input,select,textarea{width:100%;padding:11px 12px;border:1px solid light-dark(#
    <div class="rowitem"><div class="dot">⇩</div><div class="itemmain"><b>匯出完整備份（JSON）</b><small>可保留所有帳戶、交易、款項與房貸設定</small></div><button class="btn secondary small" onclick="exportJSON()">匯出</button></div>
    <div class="rowitem"><div class="dot">▤</div><div class="itemmain"><b>匯出交易 CSV</b><small>可用 Excel 開啟</small></div><button class="btn secondary small" onclick="exportCSV('transactions')">匯出</button></div>
    <div class="rowitem"><div class="dot">↥</div><div class="itemmain"><b>還原 JSON 備份</b><small>會以備份檔覆蓋目前資料，請先自行匯出現況</small></div><button class="btn ghost small" onclick="document.getElementById('restoreFile').click()">選檔</button><input id="restoreFile" type="file" accept=".json,application/json" hidden onchange="restoreJSON(event)"></div>
+   <div class="rowitem"><div class="dot">⟲</div><div class="itemmain"><b>還原到先前版本</b><small>自動備份最近 8 份，資料被蓋掉時可找回</small></div><button class="btn secondary small" onclick="openSnaps()">查看</button></div>
    <div class="rowitem"><div class="dot">☁</div><div class="itemmain"><b>雲端同步</b><small id="cloudInfo">尚未設定雲端（請見說明文件）</small></div><button class="btn secondary small" id="cloudBtn" onclick="window.cloudAction&&window.cloudAction()">登入</button></div>
   </div>
   <div class="note"><b>資料保存說明</b><br>資料會先存在這台裝置，登入後會自動同步到你的雲端帳號，手機與電腦共用同一份帳本。沒有網路時也能記帳，連線後會自動補同步。建議仍定期「匯出完整備份」留一份。</div>
@@ -197,7 +198,18 @@ function id(){return Date.now().toString(36)+Math.random().toString(36).slice(2,
 function load(){try{const d=JSON.parse(localStorage.getItem(KEY));if(d&&d.accounts){const base=defaults();d.categories=d.categories||base.categories;d.categories.income=d.categories.income||base.categories.income;d.categories.expense=d.categories.expense||base.categories.expense;d.subcategories=d.subcategories||base.subcategories;d.subcategories.expense=d.subcategories.expense||{};d.subcategories.income=d.subcategories.income||{};d.contacts=d.contacts||[];d.dues=d.dues||[];d.recurringTransactions=d.recurringTransactions||[];return d}}catch(e){}return defaults()}
 function setSync(t){const e=document.getElementById('syncState');if(e)e.textContent=t}
 function save(){data._updatedAt=Date.now();localStorage.setItem(KEY,JSON.stringify(data));setSync('● 本機已儲存');renderAll();if(window.cloudPush)window.cloudPush()}
-function applyRemote(d){localStorage.setItem(KEY,JSON.stringify(d));data=load();renderAll();runRecurringTransactions()}
+const SNAPKEY='ledger_snaps';
+function snapList(){try{return JSON.parse(localStorage.getItem(SNAPKEY))||[]}catch(e){return[]}}
+function snapshotLocal(reason,d){d=d||data;try{if(!hasData(d))return;const p=JSON.stringify(d),l=snapList();if(l[0]&&l[0].payload===p)return;l.unshift({t:Date.now(),reason,n:(d.transactions||[]).length,payload:p});let keep=l.slice(0,8);for(;;){try{localStorage.setItem(SNAPKEY,JSON.stringify(keep));break}catch(e){if(keep.length<=1)break;keep.pop()}}}catch(e){}}
+function mergeData(a,b){const newer=(a._updatedAt||0)>=(b._updatedAt||0)?a:b,older=newer===a?b:a,out=JSON.parse(JSON.stringify(newer)),key=x=>(x&&typeof x==='object'&&x.id!=null)?x.id:JSON.stringify(x);
+ for(const k of ['accounts','transactions','dues','contacts','loans','recurringTransactions']){const have=new Set((newer[k]||[]).map(key));out[k]=[...(newer[k]||[]),...(older[k]||[]).filter(x=>!have.has(key(x))).map(x=>JSON.parse(JSON.stringify(x)))]}
+ out.categories=out.categories||{};for(const kind of ['income','expense'])out.categories[kind]=[...new Set([...(out.categories[kind]||[]),...(((older.categories||{})[kind])||[])])];
+ out.subcategories=out.subcategories||{};for(const kind of ['income','expense']){out.subcategories[kind]=out.subcategories[kind]||{};const os=((older.subcategories||{})[kind])||{};for(const c in os)out.subcategories[kind][c]=[...new Set([...(out.subcategories[kind][c]||[]),...os[c]])]}
+ out._updatedAt=Date.now();return out}
+function openSnaps(){const l=snapList();openModal('還原到先前版本',l.length?'<div class="note">系統會在每天第一次開啟、被雲端資料取代前、還原備份前自動留存，最多保留最近 8 份。還原後雲端與其他裝置也會變成該版本。</div>'+l.map((x,i)=>`<div class="rowitem"><div class="itemmain"><b>${esc(new Date(x.t).toLocaleString('zh-TW',{hour12:false}))}</b><small>${esc(x.reason)} · ${x.n} 筆交易</small></div><button class="btn secondary small" onclick="restoreSnap(${i})">還原</button></div>`).join(''):'<div class="empty">目前沒有自動備份</div>')}
+function restoreSnap(i){const x=snapList()[i];if(!x)return;if(!confirm('確定還原到 '+new Date(x.t).toLocaleString('zh-TW',{hour12:false})+' 的版本？\n目前資料會先自動備份；雲端與其他裝置也會變成這個版本。'))return;try{const d=JSON.parse(x.payload);snapshotLocal('還原前',data);data=d;closeModal();save();toast('已還原到先前版本')}catch(e){toast('還原失敗')}}
+function applyRemote(d){snapshotLocal('被雲端資料取代前');localStorage.setItem(KEY,JSON.stringify(d));data=load();renderAll();runRecurringTransactions()}
+(function(){const l=snapList();if(!l.length||Date.now()-l[0].t>20*3600*1000)snapshotLocal('每日自動備份')})();
 function hasData(d){return !!(d&&((d.transactions||[]).length||(d.dues||[]).length||(d.loans||[]).length))}
 function money(n){return '$'+Math.round(Number(n)||0).toLocaleString('en-US')}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -526,7 +538,7 @@ function openPrepayment(i){let l=data.loans.find(x=>x.id===i);if(!l)return;const
 function submitPrepayment(e,i){e.preventDefault();let f=new FormData(e.target),l=data.loans.find(x=>x.id===i),amount=+f.get('amount'),accountId=f.get('accountId'),account=data.accounts.find(a=>a.id===accountId);if(!l||amount<=0||!account||account.type==='credit')return toast('請確認提前還款金額與扣款帳戶');let current=calcLoan(l);if(amount>current.remainingPrincipal)return toast('提前還款金額不可高於估算剩餘本金');const tid=id(),date=f.get('date'),note=f.get('note')||`${l.name} 房貸提前還款`;l.prepayments=l.prepayments||[];l.prepayments.push({id:id(),date,amount,note,txnId:tid,accountId});data.transactions.push({id:tid,type:'expense',date,amount,category:data.categories.expense.includes('居家')?'居家':'其他支出',subcategory:loanSub(),accountId,note,loanId:i,loanPrepayment:true});closeModal();save();switchView('loan');toast('提前還款已記錄，扣款帳戶餘額與房貸本金已同步更新')}
 function loanSub(){const l=(data.subcategories&&data.subcategories.expense&&data.subcategories.expense['居家'])||[];return l.includes('房貸')?'房貸':(l.find(x=>x.includes('房貸'))||'房租／房貸')}
 function markLoanPaid(i){let l=data.loans.find(x=>x.id===i);if(!l)return;let c=calcLoan(l),opts=[...data.accounts].sort((a,b)=>['cash','bank','credit','ewallet','investment'].indexOf(a.type)-['cash','bank','credit','ewallet','investment'].indexOf(b.type)).map(a=>`<option value="${a.id}">${esc(a.name)}（${({bank:'銀行',cash:'現金',credit:'信用卡',ewallet:'電子支付',investment:'投資'}[a.type]||a.type)}）</option>`).join('');openModal('登記本月房貸已繳',`<form onsubmit="submitLoanPayment(event,'${i}')"><div class="note">儲存後會新增一筆「房貸支出」交易，納入本月支出、總覽與收支明細，並記錄扣款帳戶。</div><div class="field"><label>扣款日期</label><input name="date" type="date" value="${dateNow()}" required></div><div class="field"><label>實際扣款帳戶</label><select name="accountId" required>${opts}</select></div><div class="field"><label>實際月付金（NT$）</label><input name="amount" type="number" min="1" step="1" value="${Math.round(c.base)}" required></div><div class="field"><label>備註</label><input name="note" value="${esc(l.name+' 房貸月付')}" required></div><div class="form-actions"><button type="button" class="btn ghost" onclick="closeModal()">取消</button><button class="btn">記錄付款並列入支出</button></div></form>`)}
-function submitLoanPayment(e,i){e.preventDefault();let f=new FormData(e.target),l=data.loans.find(x=>x.id===i),accountId=f.get('accountId'),amount=+f.get('amount');if(!l||!data.accounts.some(a=>a.id===accountId)||amount<=0)return toast('請確認扣款帳戶與付款金額');if(data.transactions.some(t=>t.loanId===i&&(t.date||'').slice(0,7)===(f.get('date')||'').slice(0,7)))return toast('這個月份已有此房貸付款紀錄，請先確認是否重複');data.transactions.push({id:id(),type:'expense',date:f.get('date'),amount,category:data.categories.expense.includes('居家')?'居家':'其他支出',subcategory:loanSub(),accountId,note:f.get('note'),loanId:i});l.paidPeriods=(+l.paidPeriods||0)+1;closeModal();save();switchView('loan');toast('房貸付款已記錄並列入本月支出')}
+function submitLoanPayment(e,i){e.preventDefault();let f=new FormData(e.target),l=data.loans.find(x=>x.id===i),accountId=f.get('accountId'),amount=+f.get('amount');if(!l||!data.accounts.some(a=>a.id===accountId)||amount<=0)return toast('請確認扣款帳戶與付款金額');if(data.transactions.some(t=>t.loanId===i&&!t.loanPrepayment&&(t.date||'').slice(0,7)===(f.get('date')||'').slice(0,7))&&!confirm('這個月份已經有一筆「每月房貸」付款紀錄（提前還款不算）。\n仍要再新增一筆嗎？'))return;data.transactions.push({id:id(),type:'expense',date:f.get('date'),amount,category:data.categories.expense.includes('居家')?'居家':'其他支出',subcategory:loanSub(),accountId,note:f.get('note'),loanId:i});l.paidPeriods=(+l.paidPeriods||0)+1;closeModal();save();switchView('loan');toast('房貸付款已記錄並列入本月支出')}
 function deleteLoan(i){if(confirm('確定刪除此房貸設定？')){data.loans=data.loans.filter(x=>x.id!==i);save()}}
 function showAmort(i){let l=data.loans.find(x=>x.id===i),c=calcLoan(l);let rows=c.rows.slice(0,12);let el=document.getElementById('amort-'+i);el.innerHTML=`<div class="panel"><div class="section-head"><h2>攤還明細</h2><span class="muted">顯示第 ${rows[0]?.period||0}–${rows[rows.length-1]?.period||0} 期</span></div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px;white-space:nowrap"><thead><tr><th style="text-align:left;padding:8px">期數</th><th style="text-align:right;padding:8px">月付金</th><th style="text-align:right;padding:8px">本金</th><th style="text-align:right;padding:8px">利息</th><th style="text-align:right;padding:8px">剩餘本金</th></tr></thead><tbody>${rows.map(r=>`<tr style="border-top:1px solid light-dark(#E4E8E2,#2C3932)"><td style="padding:8px">${r.period}</td><td style="text-align:right;padding:8px">${money(r.payment)}</td><td style="text-align:right;padding:8px">${money(r.principal)}</td><td style="text-align:right;padding:8px">${money(r.interest)}</td><td style="text-align:right;padding:8px">${money(r.balance)}</td></tr>`).join('')}</tbody></table></div></div>`;el.scrollIntoView({behavior:'smooth',block:'start'})}
 function addCategory(k){let inp=document.getElementById(k==='income'?'newIncomeCat':'newExpenseCat'),v=inp.value.trim();if(!v)return;data.categories[k]=data.categories[k]||[];if(data.categories[k].includes(v)&&!data.categoryDisabled?.[k]?.[v])return toast('分類已存在');if(!data.categories[k].includes(v))data.categories[k].push(v);if(data.categoryDisabled?.[k])delete data.categoryDisabled[k][v];data.subcategories=data.subcategories||{};data.subcategories[k]=data.subcategories[k]||{};data.subcategories[k][v]=data.subcategories[k][v]||[];inp.value='';save();toast('分類已新增')}
@@ -553,7 +565,7 @@ function renderCategories(){
 function exportCSV(which){let rows=[],filename='';if(which==='loan'){let l=data.loans[0];if(!l)return toast('請先設定房貸');let c=calcLoan(l);rows=[['期數','月付金','本金','利息','剩餘本金'],...c.rows.map(r=>[r.period,Math.round(r.payment),Math.round(r.principal),Math.round(r.interest),Math.round(r.balance)])];filename='房貸攤還明細.csv'}else{rows=[['日期','類型','主分類','子項目','金額','帳戶','對象帳戶','備註'],...data.transactions.map(t=>[t.date,typeLabel(t.type),t.category||'',t.subcategory||'',t.amount,t.accountId?accountName(t.accountId):t.fromId?accountName(t.fromId):'',t.toId?accountName(t.toId):'',t.note||''])];filename='交易紀錄.csv'}downloadCSV(rows,filename)}
 function downloadCSV(rows,filename){let csv='\ufeff'+rows.map(r=>r.map(v=>'"'+String(v??'').replace(/"/g,'""')+'"').join(',')).join('\r\n');let blob=new Blob([csv],{type:'text/csv;charset=utf-8;'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=filename;a.click();URL.revokeObjectURL(url);toast('已匯出 CSV')}
 function exportJSON(){let blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='日常帳本備份-'+dateNow()+'.json';a.click();URL.revokeObjectURL(url);toast('備份檔已匯出')}
-function restoreJSON(e){let file=e.target.files[0];if(!file)return;let r=new FileReader();r.onload=()=>{try{let d=JSON.parse(r.result);if(!d.accounts||!d.transactions||!d.dues)throw Error('format');if(confirm('確定以備份資料取代目前所有帳本資料？')){data=d;save();toast('備份已還原')}}catch(err){toast('檔案格式不正確，無法還原')}e.target.value=''};r.readAsText(file)}
+function restoreJSON(e){let file=e.target.files[0];if(!file)return;let r=new FileReader();r.onload=()=>{try{let d=JSON.parse(r.result);if(!d.accounts||!d.transactions||!d.dues)throw Error('format');if(confirm('確定以備份資料取代目前所有帳本資料？\n\n注意：如果已登入雲端，雲端與你其他裝置的資料也會一起變成這份備份。\n目前資料會先自動留存，可在設定的「還原到先前版本」找回。')){snapshotLocal('還原備份前');data=d;save();toast('備份已還原')}}catch(err){toast('檔案格式不正確，無法還原')}e.target.value=''};r.readAsText(file)}
 function clearAll(){if(confirm('確定清除所有記帳資料？若已登入雲端，雲端與其他裝置的資料也會一併清空，且無法復原。建議先匯出備份。')){localStorage.removeItem(KEY);data=defaults();save();toast('已清除所有資料')}}
 document.getElementById('today').textContent=new Date().toLocaleDateString('zh-TW',{year:'numeric',month:'long',day:'numeric',weekday:'long'});
 document.getElementById('txnMonth').value=monthNow();
@@ -595,7 +607,7 @@ runRecurringTransactions();
 const V='10.12.2',B='https://www.gstatic.com/firebasejs/'+V+'/';
 const $=id=>document.getElementById(id);
 const overlay=$('authOverlay'),msg=$('authMsg');
-let user=null,unsub=null,timer=null,firstSnap=true;
+let user=null,unsub=null,timer=null,firstSnap=true,lastSeen=0,ready=false,retry=null;
 try{
   const cfg=(await import('./firebase-config.js')).firebaseConfig;
   if(!cfg||!cfg.apiKey||cfg.apiKey.startsWith('YOUR')){throw new Error('no-config')}
@@ -612,17 +624,32 @@ try{
   $('authSkip').onclick=()=>{try{localStorage.setItem('ledger_localonly','1')}catch(e){}overlay.classList.remove('show');setSync('○ 僅存本機')};
 
   const parse=snap=>{try{return snap.exists()?JSON.parse(snap.data().payload):null}catch(e){return null}};
-  const push=async()=>{
-    if(!user)return;
+  const push=async(again)=>{
+    if(!user||!ready)return;
     setSync('☁ 同步中…');
-    try{await fs.setDoc(fs.doc(db,'users',user.uid),{payload:JSON.stringify(data),updatedAt:data._updatedAt||Date.now()});setSync('☁ 已同步')}
-    catch(e){setSync('⚠ 同步失敗，稍後重試')}
+    const ref=fs.doc(db,'users',user.uid);
+    try{
+      const res=await fs.runTransaction(db,async tx=>{
+        const sn=await tx.get(ref),r=parse(sn),rt=r?(r._updatedAt||0):0;
+        if(r&&rt>lastSeen&&rt!==(data._updatedAt||0))return {conflict:r};
+        tx.set(ref,{payload:JSON.stringify(data),updatedAt:data._updatedAt||Date.now()});
+        return {ok:true,t:data._updatedAt||0};
+      });
+      if(res.conflict){
+        if(again){setSync('⚠ 同步衝突，稍後重試');return}
+        const r=res.conflict;snapshotLocal('合併前（本機）');snapshotLocal('合併前（雲端）',r);
+        data=mergeData(data,r);try{localStorage.setItem(KEY,JSON.stringify(data))}catch(e){}
+        lastSeen=r._updatedAt||0;renderAll();toast('雲端有較新的資料，已和本機資料合併，請檢查');return push(true);
+      }
+      lastSeen=res.t;setSync('☁ 已同步');
+    }catch(e){setSync('⚠ 同步失敗，稍後重試');clearTimeout(retry);retry=setTimeout(()=>window.cloudPush&&window.cloudPush(),20000)}
   };
   window.cloudPush=()=>{if(!user)return;clearTimeout(timer);timer=setTimeout(push,600)};
 
   const onSnap=snap=>{
     if(snap.metadata.hasPendingWrites)return;
     const remote=parse(snap);
+    ready=true;if(remote)lastSeen=Math.max(lastSeen,remote._updatedAt||0);
     const lt=data._updatedAt||0;
     if(firstSnap){
       firstSnap=false;
@@ -653,7 +680,7 @@ try{
     user=u;if(unsub){unsub();unsub=null}
     refreshUI();
     if(u){
-      overlay.classList.remove('show');firstSnap=true;setSync('☁ 連線中…');
+      overlay.classList.remove('show');firstSnap=true;ready=false;lastSeen=0;setSync('☁ 連線中…');
       unsub=fs.onSnapshot(fs.doc(db,'users',u.uid),onSnap,e=>setSync('⚠ 無法連線雲端'));
     }else{
       setSync('○ 未登入（僅本機）');
