@@ -197,15 +197,15 @@ let dueBack='',viewMonth=monthNow(),selDay='',homeTab='cal',repKind='expense',re
 function id(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
 function load(){try{const d=JSON.parse(localStorage.getItem(KEY));if(d&&d.accounts){const base=defaults();d.categories=d.categories||base.categories;d.categories.income=d.categories.income||base.categories.income;d.categories.expense=d.categories.expense||base.categories.expense;d.subcategories=d.subcategories||base.subcategories;d.subcategories.expense=d.subcategories.expense||{};d.subcategories.income=d.subcategories.income||{};d.contacts=d.contacts||[];d.dues=d.dues||[];d.recurringTransactions=d.recurringTransactions||[];return d}}catch(e){}return defaults()}
 function setSync(t){const e=document.getElementById('syncState');if(e)e.textContent=t}
-function save(){data._updatedAt=Date.now();localStorage.setItem(KEY,JSON.stringify(data));setSync('● 本機已儲存');renderAll();if(window.cloudPush)window.cloudPush()}
+function save(){data._editedAt=data._updatedAt=Date.now();localStorage.setItem(KEY,JSON.stringify(data));setSync('● 本機已儲存');renderAll();if(window.cloudPush)window.cloudPush()}
 const SNAPKEY='ledger_snaps';
 function snapList(){try{return JSON.parse(localStorage.getItem(SNAPKEY))||[]}catch(e){return[]}}
 function snapshotLocal(reason,d){d=d||data;try{if(!hasData(d))return;const p=JSON.stringify(d),l=snapList();if(l[0]&&l[0].payload===p)return;l.unshift({t:Date.now(),reason,n:(d.transactions||[]).length,payload:p});let keep=l.slice(0,8);for(;;){try{localStorage.setItem(SNAPKEY,JSON.stringify(keep));break}catch(e){if(keep.length<=1)break;keep.pop()}}}catch(e){}}
-function mergeData(a,b){const newer=(a._updatedAt||0)>=(b._updatedAt||0)?a:b,older=newer===a?b:a,out=JSON.parse(JSON.stringify(newer)),key=x=>(x&&typeof x==='object'&&x.id!=null)?x.id:JSON.stringify(x);
+function mergeData(a,b){const ta=a._editedAt||a._updatedAt||0,tb=b._editedAt||b._updatedAt||0,newer=ta>=tb?a:b,older=newer===a?b:a,out=JSON.parse(JSON.stringify(newer)),key=x=>(x&&typeof x==='object'&&x.id!=null)?x.id:JSON.stringify(x);
  for(const k of ['accounts','transactions','dues','contacts','loans','recurringTransactions']){const have=new Set((newer[k]||[]).map(key));out[k]=[...(newer[k]||[]),...(older[k]||[]).filter(x=>!have.has(key(x))).map(x=>JSON.parse(JSON.stringify(x)))]}
  out.categories=out.categories||{};for(const kind of ['income','expense'])out.categories[kind]=[...new Set([...(out.categories[kind]||[]),...(((older.categories||{})[kind])||[])])];
  out.subcategories=out.subcategories||{};for(const kind of ['income','expense']){out.subcategories[kind]=out.subcategories[kind]||{};const os=((older.subcategories||{})[kind])||{};for(const c in os)out.subcategories[kind][c]=[...new Set([...(out.subcategories[kind][c]||[]),...os[c]])]}
- out._updatedAt=Date.now();return out}
+ out._editedAt=Math.max(ta,tb);out._updatedAt=Date.now();return out}
 function openSnaps(){const l=snapList();openModal('還原到先前版本',l.length?'<div class="note">系統會在每天第一次開啟、被雲端資料取代前、還原備份前自動留存，最多保留最近 8 份。還原後雲端與其他裝置也會變成該版本。</div>'+l.map((x,i)=>`<div class="rowitem"><div class="itemmain"><b>${esc(new Date(x.t).toLocaleString('zh-TW',{hour12:false}))}</b><small>${esc(x.reason)} · ${x.n} 筆交易</small></div><button class="btn secondary small" onclick="restoreSnap(${i})">還原</button></div>`).join(''):'<div class="empty">目前沒有自動備份</div>')}
 function restoreSnap(i){const x=snapList()[i];if(!x)return;if(!confirm('確定還原到 '+new Date(x.t).toLocaleString('zh-TW',{hour12:false})+' 的版本？\n目前資料會先自動備份；雲端與其他裝置也會變成這個版本。'))return;try{const d=JSON.parse(x.payload);snapshotLocal('還原前',data);data=d;closeModal();save();toast('已還原到先前版本')}catch(e){toast('還原失敗')}}
 function applyRemote(d){snapshotLocal('被雲端資料取代前');localStorage.setItem(KEY,JSON.stringify(d));data=load();renderAll();runRecurringTransactions()}
@@ -608,7 +608,7 @@ runRecurringTransactions();
 const V='10.12.2',B='https://www.gstatic.com/firebasejs/'+V+'/';
 const $=id=>document.getElementById(id);
 const overlay=$('authOverlay'),msg=$('authMsg');
-let user=null,unsub=null,timer=null,firstSnap=true,lastSeen=0,ready=false,retry=null;
+let user=null,unsub=null,timer=null,firstSnap=true,base=0,ready=false,retry=null;
 try{
   const cfg=(await import('./firebase-config.js')).firebaseConfig;
   if(!cfg||!cfg.apiKey||cfg.apiKey.startsWith('YOUR')){throw new Error('no-config')}
@@ -625,49 +625,59 @@ try{
   $('authSkip').onclick=()=>{try{localStorage.setItem('ledger_localonly','1')}catch(e){}overlay.classList.remove('show');setSync('○ 僅存本機')};
 
   const parse=snap=>{try{return snap.exists()?JSON.parse(snap.data().payload):null}catch(e){return null}};
-  const push=async(again)=>{
+  const setBase=v=>{base=v;try{localStorage.setItem('ledger_base_'+user.uid,String(v))}catch(e){}};
+  const mergeIn=r=>{snapshotLocal('合併前（本機）');snapshotLocal('合併前（雲端）',r);data=mergeData(data,r);try{localStorage.setItem(KEY,JSON.stringify(data))}catch(e){}setBase(r._updatedAt||0);renderAll();toast('雲端有較新的資料，已和本機資料合併，請檢查');return push({again:true})};
+  const push=async(o)=>{
+    o=o||{};
     if(!user||!ready)return;
     setSync('☁ 同步中…');
     const ref=fs.doc(db,'users',user.uid);
     try{
       const res=await fs.runTransaction(db,async tx=>{
         const sn=await tx.get(ref),r=parse(sn),rt=r?(r._updatedAt||0):0;
-        if(r&&rt>lastSeen&&rt!==(data._updatedAt||0))return {conflict:r};
+        if(r&&rt>base&&rt!==(data._updatedAt||0))return {conflict:r};
+        if(r&&!o.force&&(r.transactions||[]).length-(data.transactions||[]).length>10)return {shrink:r};
         tx.set(ref,{payload:JSON.stringify(data),updatedAt:data._updatedAt||Date.now()});
         return {ok:true,t:data._updatedAt||0};
       });
-      if(res.conflict){
-        if(again){setSync('⚠ 同步衝突，稍後重試');return}
-        const r=res.conflict;snapshotLocal('合併前（本機）');snapshotLocal('合併前（雲端）',r);
-        data=mergeData(data,r);try{localStorage.setItem(KEY,JSON.stringify(data))}catch(e){}
-        lastSeen=r._updatedAt||0;renderAll();toast('雲端有較新的資料，已和本機資料合併，請檢查');return push(true);
+      if(res.conflict){if(o.again){setSync('⚠ 同步衝突，稍後重試');return}return mergeIn(res.conflict)}
+      if(res.shrink){
+        const r=res.shrink;
+        if(confirm('雲端目前有 '+(r.transactions||[]).length+' 筆交易，但這台裝置只有 '+(data.transactions||[]).length+' 筆，差距很大，可能是這台資料比較舊。\n\n按「確定」：仍用這台資料覆蓋雲端。\n按「取消」：改用雲端資料（這台現有資料會先備份在本機）。')){return push({force:true,again:o.again})}
+        applyRemote(r);setBase(r._updatedAt||0);setSync('☁ 已同步');toast('已改用雲端資料');return
       }
-      lastSeen=res.t;setSync('☁ 已同步');
+      setBase(res.t);setSync('☁ 已同步');
     }catch(e){setSync('⚠ 同步失敗，稍後重試');clearTimeout(retry);retry=setTimeout(()=>window.cloudPush&&window.cloudPush(),20000)}
   };
   window.cloudPush=()=>{if(!user)return;clearTimeout(timer);timer=setTimeout(push,600)};
 
   const onSnap=snap=>{
     if(snap.metadata.hasPendingWrites)return;
-    const remote=parse(snap);
-    ready=true;if(remote)lastSeen=Math.max(lastSeen,remote._updatedAt||0);
-    const lt=data._updatedAt||0;
+    const remote=parse(snap);ready=true;
+    const lt=data._updatedAt||0,rt=remote?(remote._updatedAt||0):0;
     if(firstSnap){
       firstSnap=false;
       if(!remote){if(hasData(data)||lt){push()}else{setSync('☁ 已同步')}return}
       let linked='';try{linked=localStorage.getItem('ledger_linked')||''}catch(e){}
-      if(linked!==user.uid&&hasData(data)&&(remote._updatedAt||0)!==lt){
+      if(linked!==user.uid&&hasData(data)&&rt!==lt){
         const useCloud=confirm('雲端已經有一份帳本資料。\n\n按「確定」：改用雲端資料（這台裝置現有的資料會先備份在本機，不會直接消失）。\n按「取消」：用這台裝置的資料覆蓋雲端。');
         try{localStorage.setItem('ledger_linked',user.uid)}catch(e){}
-        if(useCloud){try{localStorage.setItem(KEY+'_prelink_backup',JSON.stringify(data))}catch(e){}applyRemote(remote);setSync('☁ 已同步');toast('已載入雲端資料')}
-        else{save()}
+        if(useCloud){try{localStorage.setItem(KEY+'_prelink_backup',JSON.stringify(data))}catch(e){}applyRemote(remote);setBase(rt);setSync('☁ 已同步');toast('已載入雲端資料')}
+        else{setBase(rt);save()}
         return;
       }
       try{localStorage.setItem('ledger_linked',user.uid)}catch(e){}
     }
-    if(remote&&(remote._updatedAt||0)>lt){applyRemote(remote);setSync('☁ 已同步');toast('已同步最新資料')}
-    else if(remote&&(remote._updatedAt||0)<lt){push()}
-    else setSync('☁ 已同步');
+    if(!remote){if(hasData(data))push();return}
+    if(rt===lt){setBase(rt);setSync('☁ 已同步');return}
+    const dirty=lt>base;
+    if(rt===base){if(dirty)push();else setSync('☁ 已同步');return}
+    if(rt>base){
+      if(!dirty){applyRemote(remote);setBase(rt);setSync('☁ 已同步');toast('已同步最新資料')}
+      else mergeIn(remote);
+      return
+    }
+    push();
   };
   const refreshUI=()=>{
     $('cloudInfo').textContent=user?('已登入：'+user.email):'尚未登入，資料只存在這台裝置';
@@ -681,7 +691,7 @@ try{
     user=u;if(unsub){unsub();unsub=null}
     refreshUI();
     if(u){
-      overlay.classList.remove('show');firstSnap=true;ready=false;lastSeen=0;setSync('☁ 連線中…');
+      overlay.classList.remove('show');firstSnap=true;ready=false;try{base=+localStorage.getItem('ledger_base_'+u.uid)||0}catch(e){base=0};setSync('☁ 連線中…');
       unsub=fs.onSnapshot(fs.doc(db,'users',u.uid),onSnap,e=>setSync('⚠ 無法連線雲端'));
     }else{
       setSync('○ 未登入（僅本機）');
